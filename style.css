@@ -1,0 +1,65 @@
+EntryDetailsScreen {
+    width: 100%;
+    height: 100%;
+}
+
+#logo {
+    width: 40;
+    height: 12;
+}
+
+#details {
+    padding: 0 5;
+    height: 100%;
+    width: 2fr;
+}
+
+#details > Label {
+    width: 100%;
+    text-align: justify;
+    text-wrap: wrap;
+}
+
+.stats > * {
+    margin-right: 2;
+}
+
+#streams {
+    height: 100%;
+    width: 1fr;
+}
+
+#streams > Button {
+    width: 100%;
+    min-height: 5;
+}
+
+PosterList {
+    scrollbar-size: 0 0;
+}
+
+Poster {
+    width: 25;
+    height: 17;
+    border: solid transparent;
+}
+
+Poster:focus {
+    border: $accent;
+}
+
+Poster:hover {
+    border: solid $primary;
+}
+
+Poster > Image {
+    height: auto;
+    width: auto;
+}
+
+Poster > Label {
+    text-align: center;
+    width: 100%;
+    background: black;
+    color: white;
+}
