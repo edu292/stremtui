@@ -12,10 +12,9 @@ from textual.containers import (
 from textual.message import Message
 from textual.reactive import reactive
 from textual.screen import Screen
-from textual.widgets import Button, ContentSwitcher, Footer, Input, Label, Select
+from textual.widgets import Button, ContentSwitcher, Input, Label, Select
 from textual_image.renderable import Image as AutoRenderable
 from textual_image.widget import Image
-from PIL import Image as PILImage
 
 from streaming import (
     close_session,
@@ -94,6 +93,7 @@ class PosterList(HorizontalScroll):
 
 class EpisodeCard(Horizontal):
     can_focus = True
+    BINDINGS = [('enter', 'select')]
 
     class Selected(Message):
         def __init__(self, episode_id) -> None:
@@ -107,6 +107,9 @@ class EpisodeCard(Horizontal):
     def on_click(self):
         self.post_message(self.Selected(self.episode_data['id']))
 
+    def action_select(self):
+        self.post_message(self.Selected(self.episode_data['id']))
+
     def compose(self) -> ComposeResult:
         yield UrlImage(self.episode_data['thumbnail'])
         with Vertical(classes='episode-details'):
@@ -115,17 +118,17 @@ class EpisodeCard(Horizontal):
 
 
 class EpisodeSelector(Vertical):
+    BINDINGS = [('l', 'change_season("next")'), ('h', 'change_season("previous")')]
     seasons_data = reactive([])
 
     def on_select_changed(self, event: Select.Changed):
         episodes_scroll = self.query_one('#episodes-scroll')
         episodes_scroll.remove_children()
-        episode_cards = []
         season_id = event.value
-        for episode_data in self.seasons_data[season_id]:
-            episode_cards.append(EpisodeCard(episode_data))
+        episode_cards = [EpisodeCard(episode_data) for episode_data in self.seasons_data[season_id]]
         episodes_scroll.mount_all(episode_cards)
         episodes_scroll.scroll_home()
+        episode_cards[0].focus()
 
     def watch_seasons_data(self, seasons_data):
         if not seasons_data:
@@ -133,20 +136,50 @@ class EpisodeSelector(Vertical):
         options = [(f'Season {number}', number) for number in range(1, len(seasons_data))]
         if seasons_data[0]:
             options.append(('Special', 0))
+            self.has_special = True
+        else:
+            self.has_special = False
+        self.seasons_options = options
         seasons_select = self.query_one('#seasons-select')
         seasons_select.set_options(options)
         seasons_select.allow_black = False
         seasons_select.value = 1
 
+    def action_change_season(self, direction):
+        seasons_select = self.query_one('#seasons-select')
+        selected_value = seasons_select.value
+        match direction:
+            case 'next':
+                if self.has_special and selected_value == len(self.seasons_data) - 1:
+                    seasons_select.value = 0
+                else:
+                    seasons_select.value += 1
+            case 'previous':
+                if self.has_special and selected_value == 0:
+                    seasons_select.value = len(self.seasons_data) - 1
+                else:
+                    seasons_select.value -= 1
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == 'next-button':
+            self.action_change_season('next')
+        elif event.button.id == 'previous-button':
+            self.action_change_season('previous')
+
     def compose(self) -> ComposeResult:
-        with Horizontal(id='controls'):
-            yield Button('Previous', disabled=True)
+        controls_container = Horizontal(id='controls')
+        controls_container.can_focus_children = False
+        with controls_container:
+            yield Button('Previous', id='previous-button')
             yield Select([], id='seasons-select')
-            yield Button('Next')
-        yield VerticalScroll(id='episodes-scroll')
+            yield Button('Next', id='next-button')
+        episodes_scroll = VerticalScroll(id='episodes-scroll')
+        episodes_scroll.can_focus = False
+        yield episodes_scroll
 
 
 class StreamSelector(VerticalScroll):
+    can_focus = False
     item_id = reactive('', init=False)
 
     class Submitted(Message):
@@ -163,17 +196,15 @@ class StreamSelector(VerticalScroll):
         self.streams = get_available_streams(item_id, self.item_type)
         stream_buttons = [Button(stream['title'], id=f'stream-{index}') for index, stream in enumerate(self.streams)]
         await self.mount_all(stream_buttons)
+        stream_buttons[0].focus()
 
     def on_button_pressed(self, event: Button.Pressed):
         stream_data = self.streams[int(event.button.id.lstrip('stream-'))]
         self.post_message(self.Submitted(stream_data))
 
-    def compose(self) -> ComposeResult:
-        return super().compose()
-
 
 class SelectionManager(ContentSwitcher):
-    BINDINGS = [('b', 'back')]
+    BINDINGS = [('b', 'back'), ('j', 'app.focus_next'), ('k', 'app.focus_previous')]
 
     def __init__(self, entry_type, entry_id, seasons_data=None, **kwargs):
         initial_tab = 'stream-selector' if entry_type == 'movie' else 'episode-selector'
@@ -221,7 +252,9 @@ class DetailsScreen(Screen):
 
     def compose(self) -> ComposeResult:
         with Horizontal(id='content'):
-            with VerticalScroll(id='details'):
+            details = VerticalScroll(id='details')
+            details.can_focus = False
+            with details:
                 yield UrlImage(self.metadata['logo'], id='logo')
                 with Horizontal(classes='stats'):
                     yield Label(self.metadata.get('runtime', ''))
@@ -252,12 +285,6 @@ class MainScreen(Screen):
 
 
 class StremtuiApp(App):
-    BINDINGS = [
-        ('h', 'focus_left', 'Left'),
-        ('l', 'focus_right', 'Right'),
-        ('k', 'focus_up', 'Up'),
-        ('j', 'focus_down', 'Down'),
-    ]
     CSS_PATH = 'style.css'
 
     def __init__(self):

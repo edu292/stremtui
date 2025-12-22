@@ -1,10 +1,10 @@
 import datetime
 import subprocess
-from collections import defaultdict
 from pathlib import Path
 from time import sleep
 
-from curl_cffi import requests
+import curl_cffi
+import httpx
 from curl_cffi.requests.exceptions import HTTPError
 from libtorrent import bdecode, bencode, parse_magnet_uri, session, torrent_flags
 
@@ -34,7 +34,7 @@ def get_bootstrap_trackers():
                 return cached_trackers
             else:
                 try:
-                    response = requests.get(TRACKERSLIST_FETCH_URL)
+                    response = httpx.get(TRACKERSLIST_FETCH_URL)
                     response.raise_for_status()
                     raw_trackers = response.text
                 except HTTPError:
@@ -46,7 +46,7 @@ def get_bootstrap_trackers():
     except FileNotFoundError:
         with open(BASE_FOLDER / 'tracker_cache', 'w') as tracker_cache_file:
             try:
-                response = requests.get(TRACKERSLIST_FETCH_URL)
+                response = httpx.get(TRACKERSLIST_FETCH_URL)
                 response.raise_for_status()
                 raw_trackers = response.text
             except HTTPError:
@@ -74,7 +74,7 @@ def search_catalog(query):
     catalog = {}
 
     for content_type in CONTENT_TYPES:
-        entries_in_type = requests.get(f'{CATALOG_PROVIDER_URL}/catalog/{content_type}/top/search={query}.json').json()[
+        entries_in_type = httpx.get(f'{CATALOG_PROVIDER_URL}/catalog/{content_type}/top/search={query}.json').json()[
             'metas'
         ]
         catalog[content_type] = entries_in_type
@@ -83,7 +83,7 @@ def search_catalog(query):
 
 
 def get_metadata(entry):
-    metadata = requests.get(f'{CATALOG_PROVIDER_URL}/meta/{entry["type"]}/{entry["imdb_id"]}.json').json()['meta']
+    metadata = httpx.get(f'{CATALOG_PROVIDER_URL}/meta/{entry["type"]}/{entry["imdb_id"]}.json').json()['meta']
 
     if entry['type'] == 'series':
         seasons_data = []
@@ -101,7 +101,9 @@ def get_metadata(entry):
 def get_available_streams(item_id, item_type):
     available_streams = []
     for stream_provider in STREAM_PROVIDERS_URL:
-        available_streams.extend(requests.get(f'{stream_provider}/stream/{item_type}/{item_id}.json').json()['streams'])
+        available_streams.extend(
+            curl_cffi.get(f'{stream_provider}/stream/{item_type}/{item_id}.json').json()['streams']
+        )
 
     return available_streams
 
