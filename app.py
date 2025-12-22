@@ -1,6 +1,8 @@
+from asyncio import as_completed
 from io import BytesIO
 
 from httpx import AsyncClient
+from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import (
     Center,
@@ -26,12 +28,15 @@ from streaming import (
 )
 
 
-async def fetch_url(url):
-    async with AsyncClient() as client:
-        response = await client.get(url, follow_redirects=True)
-        if not response.is_success:
-            return
-        return BytesIO(response.content)
+async def fetch_url(client, url):
+    try:
+        response = await client.get(url, follow_redirects=True, timeout=120)
+    except TimeoutError:
+        return
+
+    if not response.is_success:
+        return
+    return BytesIO(response.content)
 
 
 class UrlImage(Image, Renderable=AutoRenderable):
@@ -40,9 +45,14 @@ class UrlImage(Image, Renderable=AutoRenderable):
         self.url = url
 
     async def on_mount(self):
-        response = await fetch_url(self.url)
+        self.fetch_image()
+
+    @work(exclusive=True)
+    async def fetch_image(self):
+        response = await fetch_url(self.app.http_client, self.url)
         if not response:
             return
+
         self.image = response
 
 
@@ -60,7 +70,11 @@ class Poster(Vertical):
         super().__init__(**kwargs)
 
     async def on_mount(self) -> None:
-        response = await fetch_url(self.data['poster'])
+        self.fetch_image()
+
+    @work(exclusive=True)
+    async def fetch_image(self):
+        response = await fetch_url(self.app.http_client, self.data['poster'])
         if not response:
             return
         await self.remove_children()
@@ -100,6 +114,11 @@ class EpisodeCard(Horizontal):
             super().__init__()
             self.episode_id = episode_id
 
+    class Focused(Message):
+        def __init__(self, overview):
+            super().__init__()
+            self.overview = overview
+
     def __init__(self, episode_data, **kwargs):
         super().__init__(**kwargs)
         self.episode_data = episode_data
@@ -109,6 +128,10 @@ class EpisodeCard(Horizontal):
 
     def action_select(self):
         self.post_message(self.Selected(self.episode_data['id']))
+
+    def on_focus(self):
+        if overview := self.episode_data.get('overview'):
+            self.post_message(self.Focused(overview))
 
     def compose(self) -> ComposeResult:
         yield UrlImage(self.episode_data['thumbnail'])
@@ -121,12 +144,12 @@ class EpisodeSelector(Vertical):
     BINDINGS = [('l', 'change_season("next")'), ('h', 'change_season("previous")')]
     seasons_data = reactive([])
 
-    def on_select_changed(self, event: Select.Changed):
+    async def on_select_changed(self, event: Select.Changed):
         episodes_scroll = self.query_one('#episodes-scroll')
-        episodes_scroll.remove_children()
+        await episodes_scroll.remove_children()
         season_id = event.value
         episode_cards = [EpisodeCard(episode_data) for episode_data in self.seasons_data[season_id]]
-        episodes_scroll.mount_all(episode_cards)
+        await episodes_scroll.mount_all(episode_cards)
         episodes_scroll.scroll_home()
         episode_cards[0].focus()
 
@@ -250,6 +273,9 @@ class DetailsScreen(Screen):
     def action_back(self):
         self.app.pop_screen()
 
+    def on_episode_card_focused(self, event: EpisodeCard.Focused):
+        self.query_one('#summary').content = event.overview
+
     def compose(self) -> ComposeResult:
         with Horizontal(id='content'):
             details = VerticalScroll(id='details')
@@ -274,10 +300,10 @@ class MainScreen(Screen):
         yield PosterList(id='movie-posters')
         yield PosterList(id='series-posters')
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
         event.input.blur()
-        entries = search_catalog(event.value)
-        for content_type, data in entries.items():
+        for entry in as_completed(search_catalog(self.app.http_client, event.value)):
+            content_type, data = await entry
             self.query_one(f'#{content_type}-posters').posters_data = data
 
     def on_poster_selected(self, event: Poster.Selected):
@@ -287,14 +313,13 @@ class MainScreen(Screen):
 class StremtuiApp(App):
     CSS_PATH = 'style.css'
 
-    def __init__(self):
-        super().__init__()
-        self.torrent_session_handle = get_session_handle()
-
     def on_mount(self):
+        self.torrent_session_handle = get_session_handle()
+        self.http_client = AsyncClient(follow_redirects=True)
         self.push_screen(MainScreen())
 
-    def on_unmount(self):
+    async def on_unmount(self):
+        await self.http_client.aclose()
         close_session(self.torrent_session_handle)
 
 

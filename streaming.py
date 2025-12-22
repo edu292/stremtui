@@ -6,7 +6,7 @@ from time import sleep
 import curl_cffi
 import httpx
 from curl_cffi.requests.exceptions import HTTPError
-from libtorrent import bdecode, bencode, parse_magnet_uri, session, torrent_flags
+from libtorrent import bdecode, bencode, options_t, parse_magnet_uri, session, torrent_flags
 
 CONTENT_TYPES = ['series', 'movie']
 CATALOG_PROVIDER_URL = 'https://v3-cinemeta.strem.io'
@@ -70,16 +70,15 @@ def get_session_handle():
     return session_handle
 
 
-def search_catalog(query):
-    catalog = {}
+async def search_calalolg_task(client, query, content_type):
+    response = await client.get(f'{CATALOG_PROVIDER_URL}/catalog/{content_type}/top/search={query}.json')
+    return content_type, response.json()['metas']
 
-    for content_type in CONTENT_TYPES:
-        entries_in_type = httpx.get(f'{CATALOG_PROVIDER_URL}/catalog/{content_type}/top/search={query}.json').json()[
-            'metas'
-        ]
-        catalog[content_type] = entries_in_type
 
-    return catalog
+def search_catalog(client, query):
+    tasks = [search_calalolg_task(client, query, content_type) for content_type in CONTENT_TYPES]
+
+    return tasks
 
 
 def get_metadata(entry):
@@ -152,8 +151,7 @@ def start_download(session_handle: session, stream_data):
 
     player_process = subprocess.Popen(['mpv', stream_buffer_file, '--keep-open'])
     player_process.wait()
-    session_handle.remove_torrent(torrent_handle)
-    stream_buffer_file.unlink()
+    session_handle.remove_torrent(torrent_handle, options_t.delete_files)
 
 
 def close_session(session_handle: session):
