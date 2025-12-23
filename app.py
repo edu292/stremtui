@@ -30,7 +30,7 @@ from streaming import (
 
 async def fetch_url(client, url):
     try:
-        response = await client.get(url, follow_redirects=True, timeout=120)
+        response = await client.get(url, timeout=120)
     except TimeoutError:
         return
 
@@ -213,13 +213,27 @@ class StreamSelector(VerticalScroll):
     def __init__(self, item_type, **kwargs):
         super().__init__(**kwargs)
         self.item_type = item_type
+        self.streams = []
 
     async def watch_item_id(self, item_id):
+        self.fetch_streams(item_id)
+
+    @work(exclusive=True)
+    async def fetch_streams(self, item_id):
         await self.remove_children()
-        self.streams = get_available_streams(item_id, self.item_type)
-        stream_buttons = [Button(stream['title'], id=f'stream-{index}') for index, stream in enumerate(self.streams)]
-        await self.mount_all(stream_buttons)
-        stream_buttons[0].focus()
+        self.streams = []
+        requests = get_available_streams(item_id, self.item_type)
+        is_first_batch = True
+        async for request in as_completed(requests):
+            streams = await request
+            stream_buttons = [
+                Button(stream['title'], id=f'stream-{index}') for index, stream in enumerate(streams, len(self.streams))
+            ]
+            await self.mount_all(stream_buttons)
+            self.streams.extend(streams)
+            if is_first_batch:
+                stream_buttons[0].focus()
+                is_first_batch = False
 
     def on_button_pressed(self, event: Button.Pressed):
         stream_data = self.streams[int(event.button.id.lstrip('stream-'))]
@@ -259,12 +273,44 @@ class SelectionManager(ContentSwitcher):
         yield StreamSelector(self.entry_type, id='stream-selector')
 
 
+class EntryDetails(VerticalScroll):
+    can_focus = True
+
+    def __init__(self, metadata, **kwargs):
+        super().__init__(**kwargs)
+        self.metadata = metadata
+
+    def compose(self) -> ComposeResult:
+        yield UrlImage(self.metadata['logo'], id='logo')
+        with Horizontal(classes='stats'):
+            yield Label(self.metadata.get('runtime', ''))
+            yield Label(self.metadata['year'])
+            yield Label(self.metadata['imdbRating'])
+        with Horizontal(classes='stats'):
+            for member in self.metadata['cast']:
+                yield Label(member)
+        yield Label(self.metadata['description'], id='summary')
+
+
 class DetailsScreen(Screen):
     BINDINGS = [('b', 'back')]
 
     def __init__(self, entry, **kwargs) -> None:
         super().__init__(**kwargs)
-        self.metadata = get_metadata(entry)
+        self.entry = entry
+
+    async def on_mount(self):
+        self.fetch_metadata()
+
+    @work(exclusive=True)
+    async def fetch_metadata(self):
+        metadata = await get_metadata(self.app.http_client, self.entry)
+        content = Horizontal(
+            EntryDetails(metadata),
+            SelectionManager(metadata['type'], metadata['imdb_id'], metadata.get('seasons_data')),
+            id='content',
+        )
+        await self.mount(content)
 
     def on_stream_selector_submitted(self, event: StreamSelector.Submitted):
         with self.app.suspend():
@@ -276,51 +322,35 @@ class DetailsScreen(Screen):
     def on_episode_card_focused(self, event: EpisodeCard.Focused):
         self.query_one('#summary').content = event.overview
 
-    def compose(self) -> ComposeResult:
-        with Horizontal(id='content'):
-            details = VerticalScroll(id='details')
-            details.can_focus = False
-            with details:
-                yield UrlImage(self.metadata['logo'], id='logo')
-                with Horizontal(classes='stats'):
-                    yield Label(self.metadata.get('runtime', ''))
-                    yield Label(self.metadata['year'])
-                    yield Label(self.metadata['imdbRating'])
-                with Horizontal(classes='stats'):
-                    for member in self.metadata['cast']:
-                        yield Label(member)
-                yield Label(self.metadata['description'], id='summary')
-            yield SelectionManager(self.metadata['type'], self.metadata['imdb_id'], self.metadata.get('seasons_data'))
-
 
 class MainScreen(Screen):
-    def compose(self) -> ComposeResult:
-        with Center():
-            yield Input(id='Search')
-        yield PosterList(id='movie-posters')
-        yield PosterList(id='series-posters')
-
     async def on_input_submitted(self, event: Input.Submitted) -> None:
         event.input.blur()
-        for entry in as_completed(search_catalog(self.app.http_client, event.value)):
+        async for entry in as_completed(search_catalog(self.app.http_client, event.value)):
             content_type, data = await entry
             self.query_one(f'#{content_type}-posters').posters_data = data
 
     def on_poster_selected(self, event: Poster.Selected):
         self.app.push_screen(DetailsScreen(event.entry_data))
 
+    def compose(self) -> ComposeResult:
+        with Center():
+            yield Input(id='Search')
+        yield PosterList(id='movie-posters')
+        yield PosterList(id='series-posters')
+
 
 class StremtuiApp(App):
     CSS_PATH = 'style.css'
 
-    def on_mount(self):
-        self.torrent_session_handle = get_session_handle()
+    async def on_mount(self):
         self.http_client = AsyncClient(follow_redirects=True)
+        self.torrent_session_handle = await get_session_handle(self.http_client)
         self.push_screen(MainScreen())
 
     async def on_unmount(self):
         await self.http_client.aclose()
-        close_session(self.torrent_session_handle)
+        await close_session(self.torrent_session_handle)
 
 
 if __name__ == '__main__':

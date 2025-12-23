@@ -72,7 +72,7 @@ Poster:focus > Label {
 }
 
 /* Left Side: Metadata & Info */
-#details {
+EntryDetails {
     width: 35%;
     height: 100%;
     border-right: solid $border-dim;
