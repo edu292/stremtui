@@ -3,3 +3,5 @@ textual-image
 libtorrent
 httpx
 curl-cffi
+aiofiles
+pydantic

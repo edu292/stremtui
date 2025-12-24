@@ -2,12 +2,16 @@ import datetime
 import subprocess
 from pathlib import Path
 from time import sleep
+from typing import Any, Awaitable
+from collections.abc import Coroutine
 
 import curl_cffi
 from aiofiles import open
 from curl_cffi.requests.exceptions import HTTPError
 from httpx import AsyncClient
 from libtorrent import bdecode, bencode, options_t, parse_magnet_uri, session, torrent_flags
+
+from models import Entry, EntryResponse, Metadata, MetadataResponse, Stream, StreamResponse
 
 CATALOG_PROVIDER_URL = 'https://v3-cinemeta.strem.io'
 METADATA_PROVIDER_URL = 'https://v3-cinemeta.strem.io'
@@ -75,48 +79,36 @@ async def get_session_handle(client: AsyncClient) -> session:
     return session_handle
 
 
-def search_catalog(client: AsyncClient, query: str):
-    async def task(client: AsyncClient, query: str, content_type: str):
+def search_catalog(client: AsyncClient, query: str) -> list[Awaitable[tuple[Entry.Types, list[Entry]]]]:
+    async def task(content_type: str):
         response = await client.get(f'{CATALOG_PROVIDER_URL}/catalog/{content_type}/top/search={query}.json')
-        return content_type, response.json()['metas']
+        return content_type, EntryResponse.model_validate_json(response.content).metas
 
-    tasks = [task(client, query, content_type) for content_type in CONTENT_TYPES]
+    tasks = [task(entry_type) for entry_type in Entry.Types]
 
-    return tasks
-
-
-async def get_metadata(client: AsyncClient, entry: dict[str, str]) -> dict[str, str]:
-    response = await client.get(f'{METADATA_PROVIDER_URL}/meta/{entry["type"]}/{entry["imdb_id"]}.json')
-    metadata = response.json()['meta']
-
-    if entry['type'] == 'series':
-        seasons_data = []
-        for video in metadata['videos']:
-            season = video['season']
-            while len(seasons_data) < season + 1:
-                seasons_data.append([])
-
-            seasons_data[season].append(video)
-        metadata['seasons_data'] = seasons_data
-
-    return metadata
+    return tasks  # pyright: ignore[reportReturnType]
 
 
-def get_available_streams(item_id, item_type):
+async def get_metadata(client: AsyncClient, entry: Entry) -> list[Metadata]:
+    response = await client.get(f'{METADATA_PROVIDER_URL}/meta/{entry.type}/{entry.id}.json')
+    metadata = MetadataResponse.model_validate_json(response.content)
+
+    return metadata.meta
+
+
+def get_available_streams(metadata: Metadata) -> list[Awaitable[list[Stream]]]:
     async def task(stream_provider):
-        response = await CURL_CFFI_CLIENT.get(f'{stream_provider}/stream/{item_type}/{item_id}.json')
-        return response.json()['streams']
+        response = await CURL_CFFI_CLIENT.get(f'{stream_provider}/stream/{metadata.type}/{metadata.id}.json')
+        return StreamResponse.model_validate_json(response.content).streams
 
     tasks = [task(stream_provider) for stream_provider in STREAM_PROVIDERS_URL]
 
-    return tasks
+    return tasks  # pyright: ignore[reportReturnType]
 
 
-def start_download(session_handle: session, stream_data):
-    magnet_link = f'magnet:?xt=urn:btih:{stream_data["infoHash"]}'
-
+def start_download(session_handle: session, stream: Stream):
     current_torrent_trackers = session_handle.bootstrap_trackers.copy()
-    for source in stream_data.get('sources', []):
+    for source in stream.get('sources', []):
         if source.startswith('tracker:'):
             current_torrent_trackers.append(source.lstrip('tracker:'))
         if not source.startswith('dht:'):
@@ -138,9 +130,9 @@ def start_download(session_handle: session, stream_data):
     torrent_info = torrent_handle.torrent_file()
     num_files = torrent_info.num_files()
     priorities = [0] * num_files
-    stream_file_index = stream_data['fileIdx']
+    stream_file_index = stream['fileIdx']
     priorities[stream_file_index] = 1
-    stream_file_extension = Path(stream_data['behaviorHints']['filename']).suffix
+    stream_file_extension = Path(stream['behaviorHints']['filename']).suffix
 
     stream_buffer_file = BASE_FOLDER / f'stream_buffer{stream_file_extension}'
     if stream_buffer_file.exists():
