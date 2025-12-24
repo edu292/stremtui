@@ -1,9 +1,8 @@
 import datetime
 import subprocess
+from collections.abc import Awaitable
 from pathlib import Path
 from time import sleep
-from typing import Any, Awaitable
-from collections.abc import Coroutine
 
 import curl_cffi
 from aiofiles import open
@@ -89,18 +88,19 @@ def search_catalog(client: AsyncClient, query: str) -> list[Awaitable[tuple[Entr
     return tasks  # pyright: ignore[reportReturnType]
 
 
-async def get_metadata(client: AsyncClient, entry: Entry) -> list[Metadata]:
-    response = await client.get(f'{METADATA_PROVIDER_URL}/meta/{entry.type}/{entry.id}.json')
+async def get_metadata(client: AsyncClient, entry_type: Entry.Types, entry_id: str) -> Metadata:
+    response = await client.get(f'{METADATA_PROVIDER_URL}/meta/{entry_type}/{entry_id}.json')
     metadata = MetadataResponse.model_validate_json(response.content)
 
     return metadata.meta
 
 
-def get_available_streams(metadata: Metadata) -> list[Awaitable[list[Stream]]]:
+def get_available_streams(metadata: Metadata, coordinates: str | None = None) -> list[Awaitable[list[Stream]]]:
     async def task(stream_provider):
-        response = await CURL_CFFI_CLIENT.get(f'{stream_provider}/stream/{metadata.type}/{metadata.id}.json')
+        response = await CURL_CFFI_CLIENT.get(f'{stream_provider}/stream/{metadata.type}/{item_id}.json')
         return StreamResponse.model_validate_json(response.content).streams
 
+    item_id = metadata.id + coordinates if coordinates else metadata.id
     tasks = [task(stream_provider) for stream_provider in STREAM_PROVIDERS_URL]
 
     return tasks  # pyright: ignore[reportReturnType]
@@ -108,13 +108,9 @@ def get_available_streams(metadata: Metadata) -> list[Awaitable[list[Stream]]]:
 
 def start_download(session_handle: session, stream: Stream):
     current_torrent_trackers = session_handle.bootstrap_trackers.copy()
-    for source in stream.get('sources', []):
-        if source.startswith('tracker:'):
-            current_torrent_trackers.append(source.lstrip('tracker:'))
-        if not source.startswith('dht:'):
-            current_torrent_trackers.append(source)
+    current_torrent_trackers.append(stream.sources)
 
-    params = parse_magnet_uri(magnet_link)
+    params = parse_magnet_uri(stream.magnet_link)
     params.save_path = '.'
     params.flags |= torrent_flags.sequential_download
     params.flags |= torrent_flags.upload_mode
@@ -130,9 +126,9 @@ def start_download(session_handle: session, stream: Stream):
     torrent_info = torrent_handle.torrent_file()
     num_files = torrent_info.num_files()
     priorities = [0] * num_files
-    stream_file_index = stream['fileIdx']
+    stream_file_index = stream.file_index
     priorities[stream_file_index] = 1
-    stream_file_extension = Path(stream['behaviorHints']['filename']).suffix
+    stream_file_extension = stream.filename.suffix
 
     stream_buffer_file = BASE_FOLDER / f'stream_buffer{stream_file_extension}'
     if stream_buffer_file.exists():
