@@ -81,16 +81,14 @@ Solving this is a fantastic engineering challenge. We need to build a two-way br
 1. **IPC Communication:** We will establish an Inter-Process Communication (IPC) socket with `mpv` to constantly read the current playback time and listen for "seek" events.
 2. **Time-to-Byte Translation:** When a user skips to a new timestamp, we must calculate where that time exists in the physical file. Assuming a relatively constant bitrate, we can estimate the target byte position using:
 
-$$Byte\_Target \approx \left( \frac{Target\_Time\_(s)}{Total\_Duration\_(s)} \right) \times Total\_File\_Size\_(bytes)$$
+$$ByteTarget \approx \left( \frac{TargetTime\_(s)}{TotalDuration\_(s)} \right) \times TotalFileSize(bytes)$$
 
 
 3. **Byte-to-Piece Mapping:** Torrents are divided into chunks called "pieces". To tell `libtorrent` what to download, we map the target byte to its corresponding piece index:
 
-$$Piece\_Index = \lfloor \frac{Byte\_Target}{Piece\_Size\_(bytes)} \rfloor$$
+$$PieceIndex = \lfloor \frac{ByteTarget}{PieceSize(bytes)} \rfloor$$
 
 
 4. **Dynamic Re-Prioritization:** Once we have the target `Piece_Index`, we will dynamically update `libtorrent`'s priorities on the fly. We will set the new target pieces (and the ones immediately following them) to the maximum priority, while deprioritizing the skipped pieces.
 
 This will result in a buffer that "follows" the user's cursor, providing a smooth, responsive, Netflix-like scrubbing experience entirely powered by decentralized peer-to-peer swarms.
-
----
