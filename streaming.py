@@ -23,6 +23,7 @@ DHT_ROUTERS = (
 )
 BASE_FOLDER = Path(__file__).parent.resolve()
 CURL_CFFI_CLIENT = curl_cffi.AsyncSession()
+CONTENT_TYPES = ('series', 'movie')
 
 
 async def get_bootstrap_trackers(client: AsyncClient) -> list[str]:
