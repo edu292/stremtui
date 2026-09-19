@@ -1,3 +1,18 @@
+[project]
+name = "stremtui"
+version = "0.1.0"
+description = "A quick, easy-to-use TUI for torrent streaming. It handles Stremio add-on scraping and torrent stream processing behind the scenes, piping directly to mpv for instant playback."
+readme = "README.md"
+requires-python = ">3.13"
+dependencies = [
+    "aiofiles>=25.1.0",
+    "curl-cffi>=0.15.0",
+    "httpx>=0.28.1",
+    "libtorrent>=2.0.11",
+    "textual>=8.2.6",
+    "textual-image>=0.12.0",
+]
+
 [tool.basedpyright]
 typeCheckingMode = "standard"
 reportAny = false
